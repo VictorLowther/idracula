@@ -220,7 +220,7 @@ func scan(addrs, username, password string) (res []*NodeInfo) {
 }
 
 func main() {
-	addrs := flag.String("scan", "", "Comma-seperated list of IP addresses to scan for iDRAC presence")
+	addrs := flag.String("scan", "", "Comma-seperated list of IP addresses to scan for iDRAC presence.\n      Ranges are allowed, and must be seperated by a hyphen.\n      IP4 and IP6 compatible, but only IP4 addresses tested.")
 	username := flag.String("u", "", "Username to try to log in as")
 	password := flag.String("p", "", "Password to try and use")
 	flag.Parse()
