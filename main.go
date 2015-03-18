@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/VictorLowther/simplexml/dom"
 	"github.com/VictorLowther/simplexml/search"
 	"github.com/VictorLowther/wsman"
 	"log"
@@ -13,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type NodeInfo struct {
@@ -36,14 +38,46 @@ type scanInfo struct {
 	username, password string
 }
 
+func waitForJob(client *wsman.Client, jobinfo *dom.Element) bool {
+	jobID := string(search.First(search.Attr("Name", "*", "InstanceID"), jobinfo.All()).Content)
+	log.Printf("%s: Waiting for job %s to finish\n", client.Endpoint(), jobID)
+	var code string
+	ret := false
+	for {
+		time.Sleep(10 * time.Second)
+		msg := client.Get("http://schemas.dell.com/wbem/wscim/1/cim-schema/2/DCIM_LifecycleJob")
+		msg.Selectors("InstanceID", jobID)
+		res, err := msg.Send()
+		if err != nil {
+			log.Printf("Error monitoring job: %v\n", err)
+			if res != nil {
+				log.Printf("Response: %s\n", res.String())
+			}
+			goto out
+		}
+		code = strings.TrimSpace(
+			string(search.First(
+				search.Tag("JobStatus", "*"),
+				res.AllBodyElements()).Content))
+		switch code {
+		case "Completed":
+			ret = true
+			goto out
+		case "Completed with Errors":
+			goto out
+		case "Failed":
+			goto out
+		}
+	}
+out:
+	log.Printf("Job %s finished with %s\n", jobID, code)
+	return ret
+}
+
 func hasIdrac(client *wsman.Client) bool {
 	res, err := client.Identify()
 	if err != nil {
 		log.Printf("No WSMAN endpoint at %s\n", client.Endpoint())
-		return false
-	}
-	if res.Fault() != nil {
-		log.Printf("SOAP fault communicating with %s\n", client.Endpoint())
 		return false
 	}
 	n := search.First(search.Tag("ProductName", "*"), res.AllBodyElements())
@@ -109,22 +143,123 @@ func getCPU(client *wsman.Client) string {
 	return strconv.Itoa(activeCores)
 }
 
-func getMACs(client *wsman.Client) []string {
-	result := []string{}
+func getBootNic(client *wsman.Client, nics []*dom.Element) *dom.Element {
+	fqdds := []string{}
+	for _, nic := range nics {
+		n := search.First(search.Tag("FQDD", "*"), nic.Children())
+		if n == nil {
+			log.Printf("Nic did not contain an FQDD")
+			os.Exit(1)
+		}
+		fqdd := string(n.Content) // Only care about integrated nics
+		if strings.HasPrefix(fqdd, "NIC.Integrated.") {
+			fqdds = append(fqdds, fqdd)
+		}
+	}
+	if len(fqdds) < 1 {
+		log.Printf("No integrated nics!")
+		os.Exit(1)
+	}
+	sort.Strings(fqdds)
+	bootnic := fqdds[0]
+	result := search.First(search.Content([]byte(bootnic)), nics[0].Parent().All()).Parent()
+	if result == nil {
+		log.Printf("Unable to find NIC with FQDD %s\n", bootnic)
+		return nil
+	}
+	// Now, make sure it can PXE boot
+	msg := client.Get("http://schemas.dell.com/wbem/wscim/1/cim-schema/2/DCIM_NICEnumeration")
+	msg.Selectors("InstanceID", bootnic+":LegacyBootProto")
+	res, err := msg.Send()
+	if err != nil {
+		log.Printf("Error checking whether %s can PXE boot: %v\n", bootnic, err)
+		return result
+	}
+	currentval := string(search.First(search.Tag("CurrentValue", "*"), res.AllBodyElements()).Content)
+	if currentval == "PXE" {
+		return result
+	}
+	msg = client.Invoke("http://schemas.dell.com/wbem/wscim/1/cim-schema/2/DCIM_NICService", "SetAttribute")
+	msg.Selectors(
+		"SystemCreationClassName", "DCIM_ComputerSystem",
+		"CreationClassName", "DCIM_NICService",
+		"SystemName", "DCIM:ComputerSystem",
+		"Name", "DCIM:NICService")
+	msg.Parameters(
+		"Target", bootnic,
+		"AttributeName", "LegacyBootProto",
+		"AttributeValue", "PXE")
+	res, err = msg.Send()
+	if err != nil {
+		log.Printf("Error ensuring %s can PXE boot: %v\n", bootnic, err)
+		return result
+	}
+	retvals := search.First(search.Tag("SetAttribute_OUTPUT", "*"), res.AllBodyElements())
+	if retvals == nil {
+		log.Printf("Method invocation result did not return an output element!\n%s\n", res.String())
+		return result
+	}
+	code := search.First(search.Tag("ReturnValue", "*"), retvals.Children())
+	if string(code.Content) != "0" {
+		log.Printf("Error ensuring NIC %s can PXE boot:\n%s\n", bootnic, res.String())
+		return result
+	}
+	needReboot := string(search.First(search.Tag("RebootRequired", "*"), retvals.Children()).Content)
+	if needReboot != "Yes" {
+		return result
+	}
+	// Create the config job.
+	msg = client.Invoke("http://schemas.dell.com/wbem/wscim/1/cim-schema/2/DCIM_NICService", "CreateTargetedConfigJob")
+	msg.Selectors(
+		"SystemCreationClassName", "DCIM_ComputerSystem",
+		"CreationClassName", "DCIM_NICService",
+		"SystemName", "DCIM:ComputerSystem",
+		"Name", "DCIM:NICService")
+	msg.Parameters(
+		"Target", bootnic,
+		"RebootJobType", "1",
+		"ScheduledStartTime", "TIME_NOW")
+	res, err = msg.Send()
+	if err != nil {
+		log.Printf("Error ensuring %s can PXE boot: %v\n", bootnic, err)
+		return result
+	}
+	retvals = search.First(search.Tag("CreateTargetedConfigJob_OUTPUT", "*"), res.AllBodyElements())
+	if retvals == nil {
+		log.Printf("Method invocation result did not return an output element!\n%s\n", res.String())
+		return result
+	}
+	code = search.First(search.Tag("ReturnValue", "*"), retvals.Children())
+	if string(code.Content) != "4096" {
+		log.Printf("Error ensuring NIC %s can PXE boot:\n%s\n", bootnic, res.String())
+		return result
+	}
+	job_service := search.First(search.Tag("ReferenceParameters", "*"), res.AllBodyElements())
+	if job_service == nil {
+		log.Printf("Did not get job info back!")
+		return result
+	}
+	waitForJob(client, job_service)
+	return result
+}
+
+func getMAC(client *wsman.Client) string {
 	msg := client.Enumerate("http://schemas.dell.com/wbem/wscim/1/cim-schema/2/DCIM_NICView")
 	msg.Selectors("InstanceID", "System.Embedded.1")
 	res, err := msg.Send()
 	if err != nil {
 		log.Printf("Error getting nics: %v\n", err)
-		return result
+		return ""
 	}
-	macs := search.All(search.Tag("CurrentMACAddress", "*"), res.AllBodyElements())
-	for _, mac := range macs {
-		m := strings.ToLower(string(mac.Content))
-		result = append(result, m)
+	bootnic := getBootNic(client,
+		search.All(search.Tag("DCIM_NICView", "*"), res.AllBodyElements()))
+	if bootnic == nil {
+		return ""
 	}
-	sort.Strings(result)
-	return result
+	return strings.ToLower(
+		string(search.First(
+			search.Tag("CurrentMACAddress", "*"),
+			bootnic.Children()).Content))
 }
 
 func scanOne(in chan *scanInfo, out chan *NodeInfo, done chan int) {
@@ -153,7 +288,7 @@ func scanOne(in chan *scanInfo, out chan *NodeInfo, done chan int) {
 				Cpu:        getCPU(client),
 				Disk:       getDisk(client),
 				Arch:       "x86_64",
-				Mac:        getMACs(client),
+				Mac:        []string{getMAC(client)},
 			}
 			out <- node
 		}
