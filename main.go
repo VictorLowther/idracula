@@ -152,12 +152,21 @@ func getBootNic(client *wsman.Client, nics []*dom.Element) *dom.Element {
 			os.Exit(1)
 		}
 		fqdd := string(n.Content) // Only care about integrated nics
-		if strings.HasPrefix(fqdd, "NIC.Integrated.") {
-			fqdds = append(fqdds, fqdd)
+		if ! strings.HasPrefix(fqdd, "NIC.Integrated.") {
+			log.Printf("%s is not integrated, skipping\n",fqdd)
+			continue
 		}
+		speed := search.First(search.Tag("LinkSpeed","*"),nic.Children())
+		// If there is not speed setting, then the server is too old to report it.
+		// Happily enough, that also means it is too old for 10 gig ports to be a thing.
+		if speed != nil && string(speed.Content) != "3" {
+			log.Printf("%s is not a gigabit Ethernet port\n",fqdd)
+			continue
+		}
+		fqdds = append(fqdds, fqdd)
 	}
 	if len(fqdds) < 1 {
-		log.Printf("No integrated nics!")
+		log.Printf("No integrated 1 GB nics!")
 		os.Exit(1)
 	}
 	sort.Strings(fqdds)
