@@ -113,8 +113,19 @@ func getDisk(client *wsman.Client) string {
 		log.Printf("Error getting disks: %v\n", err)
 		return "-1"
 	}
-	vds := search.All(search.Tag("DCIM_VirtualDiskView", "*"), res.AllBodyElements())
-	return strconv.Itoa(len(vds))
+	vd := search.First(search.Tag("DCIM_VirtualDiskView", "*"), res.AllBodyElements())
+	if vd == nil {
+		log.Printf("Error getting first disk information\n")
+		return "-1"
+	}
+	sizeBytes := search.First(search.Tag("SizeInBytes", "*"), vd.Children())
+	if sizeBytes == nil {
+		log.Printf("Error getting first disk size\n")
+		return "-1"
+	}
+	count, err := strconv.Atoi(string(sizeBytes.Content))
+	sizeGBytes := count / (1024 * 1024 * 1024)
+	return strconv.Itoa(sizeGBytes)
 }
 
 func getCPU(client *wsman.Client) string {
@@ -152,15 +163,15 @@ func getBootNic(client *wsman.Client, nics []*dom.Element) *dom.Element {
 			os.Exit(1)
 		}
 		fqdd := string(n.Content) // Only care about integrated nics
-		if ! strings.HasPrefix(fqdd, "NIC.Integrated.") {
-			log.Printf("%s is not integrated, skipping\n",fqdd)
+		if !strings.HasPrefix(fqdd, "NIC.Integrated.") {
+			log.Printf("%s is not integrated, skipping\n", fqdd)
 			continue
 		}
-		speed := search.First(search.Tag("LinkSpeed","*"),nic.Children())
+		speed := search.First(search.Tag("LinkSpeed", "*"), nic.Children())
 		// If there is not speed setting, then the server is too old to report it.
 		// Happily enough, that also means it is too old for 10 gig ports to be a thing.
 		if speed != nil && string(speed.Content) != "3" {
-			log.Printf("%s is not a gigabit Ethernet port\n",fqdd)
+			log.Printf("%s is not a gigabit Ethernet port\n", fqdd)
 			continue
 		}
 		fqdds = append(fqdds, fqdd)

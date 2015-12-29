@@ -23,7 +23,7 @@ yields (without logging output):
       	  ],
       	  "cpu": "12",
       	  "memory": "98304",
-      	  "disk": "7",
+      	  "disk": "500",
       	  "arch": "x86_64"
     	},
     	{
@@ -41,7 +41,7 @@ yields (without logging output):
       	  ],
       	  "cpu": "16",
       	  "memory": "131072",
-      	  "disk": "0",
+      	  "disk": "500",
       	  "arch": "x86_64"
     	},
         {
@@ -59,7 +59,7 @@ yields (without logging output):
       	  ],
       	  "cpu": "20",
       	  "memory": "98304",
-      	  "disk": "1",
+      	  "disk": "1200",
       	  "arch": "x86_64"
         }
       ]
