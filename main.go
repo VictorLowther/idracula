@@ -34,8 +34,8 @@ type Nodes struct {
 }
 
 type scanInfo struct {
-	addr               net.IP
-	username, password string
+	addr                             net.IP
+	username, password, bootnic_name string
 }
 
 func waitForJob(client *wsman.Client, jobinfo *dom.Element) bool {
@@ -143,7 +143,7 @@ func getCPU(client *wsman.Client) string {
 	return strconv.Itoa(activeCores)
 }
 
-func getBootNic(client *wsman.Client, nics []*dom.Element) *dom.Element {
+func getBootNICCandidat(client *wsman.Client, nics []*dom.Element) []string {
 	fqdds := []string{}
 	for _, nic := range nics {
 		n := search.First(search.Tag("FQDD", "*"), nic.Children())
@@ -164,6 +164,17 @@ func getBootNic(client *wsman.Client, nics []*dom.Element) *dom.Element {
 			continue
 		}
 		fqdds = append(fqdds, fqdd)
+	}
+
+	return fqdds
+}
+
+func getBootNic(client *wsman.Client, nics []*dom.Element, bootnic_name string) *dom.Element {
+	fqdds := []string{}
+	if bootnic_name == "" {
+		fqdds = getBootNICCandidat(client, nics)
+	} else {
+		fqdds = append(fqdds, bootnic_name)
 	}
 	if len(fqdds) < 1 {
 		log.Printf("No integrated 1 GB nics!")
@@ -252,7 +263,7 @@ func getBootNic(client *wsman.Client, nics []*dom.Element) *dom.Element {
 	return result
 }
 
-func getMAC(client *wsman.Client) string {
+func getMAC(client *wsman.Client, bootnic_name string) string {
 	msg := client.Enumerate("http://schemas.dell.com/wbem/wscim/1/cim-schema/2/DCIM_NICView")
 	msg.Selectors("InstanceID", "System.Embedded.1")
 	res, err := msg.Send()
@@ -261,7 +272,7 @@ func getMAC(client *wsman.Client) string {
 		return ""
 	}
 	bootnic := getBootNic(client,
-		search.All(search.Tag("DCIM_NICView", "*"), res.AllBodyElements()))
+		search.All(search.Tag("DCIM_NICView", "*"), res.AllBodyElements()), bootnic_name)
 	if bootnic == nil {
 		return ""
 	}
@@ -271,7 +282,7 @@ func getMAC(client *wsman.Client) string {
 			bootnic.Children()).Content))
 }
 
-func scanOne(in chan *scanInfo, out chan *NodeInfo, done chan int) {
+func scanOne(in chan *scanInfo, out chan *NodeInfo, done chan int, bootnic_name string) {
 	for {
 		c, ok := <-in
 		if !ok {
@@ -297,7 +308,7 @@ func scanOne(in chan *scanInfo, out chan *NodeInfo, done chan int) {
 				Cpu:        getCPU(client),
 				Disk:       getDisk(client),
 				Arch:       "x86_64",
-				Mac:        []string{getMAC(client)},
+				Mac:        []string{getMAC(client, bootnic_name)},
 			}
 			out <- node
 		}
@@ -305,7 +316,7 @@ func scanOne(in chan *scanInfo, out chan *NodeInfo, done chan int) {
 	done <- 1
 }
 
-func scan(addrs, username, password string) (res []*NodeInfo) {
+func scan(addrs, username, password string, bootnic_name string) (res []*NodeInfo) {
 	res = []*NodeInfo{}
 	workers := 100
 	scanChan := make(chan *scanInfo, workers)
@@ -313,7 +324,7 @@ func scan(addrs, username, password string) (res []*NodeInfo) {
 	doneChan := make(chan int)
 	// Make some workers
 	for i := 0; i < workers; i++ {
-		go scanOne(scanChan, resChan, doneChan)
+		go scanOne(scanChan, resChan, doneChan, bootnic_name)
 	}
 	// Produce a stream of work for them.
 	go func() {
@@ -325,7 +336,7 @@ func scan(addrs, username, password string) (res []*NodeInfo) {
 					log.Printf("Invalid IP address%s\n", addr)
 					continue
 				}
-				scanChan <- &scanInfo{addr: toScan, username: username, password: password}
+				scanChan <- &scanInfo{addr: toScan, username: username, password: password, bootnic_name: bootnic_name}
 			} else {
 				first := net.ParseIP(addrRange[0])
 				last := net.ParseIP(addrRange[1])
@@ -343,7 +354,7 @@ func scan(addrs, username, password string) (res []*NodeInfo) {
 					numLen := len(numBytes)
 					toScan := make([]byte, 16, 16)
 					copy(toScan[16-numLen:], numBytes)
-					scanChan <- &scanInfo{addr: toScan, username: username, password: password}
+					scanChan <- &scanInfo{addr: toScan, username: username, password: password, bootnic_name: bootnic_name}
 				}
 			}
 		}
@@ -367,9 +378,10 @@ func main() {
 	addrs := flag.String("scan", "", "Comma-seperated list of IP addresses to scan for iDRAC presence.\n      Ranges are allowed, and must be seperated by a hyphen.\n      IP4 and IP6 compatible, but only IP4 addresses tested.")
 	username := flag.String("u", "", "Username to try to log in as")
 	password := flag.String("p", "", "Password to try and use")
+	bootnic_name := flag.String("bootnic", "", "name of the NIC used for PXE")
 	flag.Parse()
 	if *addrs != "" {
-		nodes := &Nodes{Nodes: scan(*addrs, *username, *password)}
+		nodes := &Nodes{Nodes: scan(*addrs, *username, *password, *bootnic_name)}
 		res, err := json.MarshalIndent(nodes, "", "  ")
 		if err != nil {
 			log.Printf("Error formatting output: %v\n", err)
