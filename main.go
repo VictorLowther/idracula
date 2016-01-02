@@ -106,14 +106,13 @@ func getMemory(client *wsman.Client) string {
 }
 
 func getDisk(client *wsman.Client) string {
-	msg := client.Enumerate("http://schemas.dell.com/wbem/wscim/1/cim-schema/2/DCIM_VirtualDiskView")
-	msg.Selectors("InstanceID", "System.Embedded.1")
+	msg := client.Enumerate("http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/root/dcim/DCIM_PhysicalDiskView")
 	res, err := msg.Send()
 	if err != nil {
 		log.Printf("Error getting disks: %v\n", err)
 		return "-1"
 	}
-	vd := search.First(search.Tag("DCIM_VirtualDiskView", "*"), res.AllBodyElements())
+	vd := search.First(search.Tag("DCIM_PhysicalDiskView", "*"), res.AllBodyElements())
 	if vd == nil {
 		log.Printf("Error getting first disk information\n")
 		return "-1"
