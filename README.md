@@ -1,13 +1,19 @@
-This is an idrac management utility
+# This is an idrac management utility
+
+idracula generates instackenv.json file suitable for OpenStack installer based on
+TripleO like RDO-manager or OSP-directory.
+
+By design, idracula pick the first NIC with a 1GB link as the PXE interface. The hosts must be
+running before idracula is started, this because the NIC has to be active during the discovery.
+If you use auto-negotation, double check the NIC get the link negotiated as expected.
+
+Once a NIC has be found, idracula will switch its PXE boot parameter on.
 
 Right now, it only scans address ranges and spits out JSON for the dracs it finds.
 
 Example:
 
     $ ./idracula -u root -p 'password' -scan '192.168.128.1-192.168.128.254'
-
-yields (without logging output):
-
     {
       "nodes": [
         {
@@ -23,7 +29,7 @@ yields (without logging output):
       	  ],
       	  "cpu": "12",
       	  "memory": "98304",
-      	  "disk": "7",
+      	  "disk": "500",
       	  "arch": "x86_64"
     	},
     	{
@@ -41,7 +47,7 @@ yields (without logging output):
       	  ],
       	  "cpu": "16",
       	  "memory": "131072",
-      	  "disk": "0",
+      	  "disk": "500",
       	  "arch": "x86_64"
     	},
         {
@@ -59,7 +65,7 @@ yields (without logging output):
       	  ],
       	  "cpu": "20",
       	  "memory": "98304",
-      	  "disk": "1",
+      	  "disk": "1200",
       	  "arch": "x86_64"
         }
       ]
